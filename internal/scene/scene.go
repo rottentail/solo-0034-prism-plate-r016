@@ -27,13 +27,37 @@ type Shape struct {
 	Brush     Brush       `json:"brush"`
 	Transform geom.Matrix `json:"transform"`
 }
+
+// BlurEffect is a Gaussian layer blur. Radius is the standard deviation sigma
+// in canvas pixels. The blur operates on the whole composited layer result,
+// never on individual shapes, so intersections never expose internal edges.
+type BlurEffect struct {
+	Radius float64 `json:"radius"`
+}
+
+// ShadowEffect is a soft drop shadow derived from the composited layer alpha.
+// Radius is the Gaussian sigma in canvas pixels; Offset is in canvas pixels.
+// Shadow strength is the color alpha; zero alpha is rejected at admission.
+type ShadowEffect struct {
+	Color  Color      `json:"color"`
+	Offset geom.Point `json:"offset"`
+	Radius float64    `json:"radius"`
+}
+
+// LayerEffects groups the optional per-layer post-compositing effects.
+type LayerEffects struct {
+	Blur   *BlurEffect   `json:"blur,omitempty"`
+	Shadow *ShadowEffect `json:"shadow,omitempty"`
+}
+
 type Layer struct {
-	ID      string    `json:"id"`
-	Opacity float64   `json:"opacity"`
-	Blend   string    `json:"blend"`
-	Clip    []geom.Op `json:"clip,omitempty"`
-	Mask    []geom.Op `json:"mask,omitempty"`
-	Shapes  []Shape   `json:"shapes"`
+	ID      string        `json:"id"`
+	Opacity float64       `json:"opacity"`
+	Blend   string        `json:"blend"`
+	Clip    []geom.Op     `json:"clip,omitempty"`
+	Mask    []geom.Op     `json:"mask,omitempty"`
+	Shapes  []Shape       `json:"shapes"`
+	Effects *LayerEffects `json:"effects,omitempty"`
 }
 type Document struct {
 	Width      int     `json:"width"`
@@ -53,7 +77,8 @@ type CompiledLayer struct {
 	Shapes []CompiledShape
 }
 type Compiled struct {
-	Document Document
-	Layers   []CompiledLayer
-	Segments int
+	Document   Document
+	Layers     []CompiledLayer
+	Segments   int
+	EffectTaps int64
 }

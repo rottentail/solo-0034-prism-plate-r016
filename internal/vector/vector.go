@@ -4,6 +4,7 @@ package vector
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"prismplate/internal/geom"
 	"prismplate/internal/scene"
 	"strings"
@@ -28,6 +29,49 @@ func color(c scene.Color) string {
 	return fmt.Sprintf("rgb(%s%%,%s%%,%s%%)", number(c.R*100), number(c.G*100), number(c.B*100))
 }
 
+// writeFilter emits a self-contained filter matching the raster pipeline:
+// optional Gaussian blur of the whole layer, then a premultiplied drop
+// shadow derived from the layer alpha, merged back over the layer.
+func writeFilter(b *bytes.Buffer, i int, e *scene.LayerEffects, dw, dh float64) {
+	reach := 0.0
+	if e.Blur != nil {
+		reach = 3 * e.Blur.Radius
+	}
+	if e.Shadow != nil {
+		r := 3*e.Shadow.Radius + math.Abs(e.Shadow.Offset.X)
+		if r > reach {
+			reach = r
+		}
+		r = 3*e.Shadow.Radius + math.Abs(e.Shadow.Offset.Y)
+		if r > reach {
+			reach = r
+		}
+	}
+	fmt.Fprintf(b, `<filter id="f%d" x="-%.6g" y="-%.6g" width="%.6g" height="%.6g" filterUnits="userSpaceOnUse" color-interpolation-filters="linearRGB">`, i, reach, reach, dw+2*reach, dh+2*reach)
+	body := "SourceGraphic"
+	if e.Blur != nil {
+		// Whole-layer blur; this is the graphic placed over the shadow.
+		fmt.Fprintf(b, `<feGaussianBlur in="SourceGraphic" stdDeviation="%.9g" result="blur"/>`, e.Blur.Radius)
+		body = "blur"
+	}
+	if e.Shadow != nil {
+		// The shadow is derived from the layer alpha silhouette (SourceAlpha),
+		// matching the raster BlurAlpha pass, never from colored pixels.
+		in := "SourceAlpha"
+		if e.Shadow.Radius > 0 {
+			fmt.Fprintf(b, `<feGaussianBlur in="SourceAlpha" stdDeviation="%.9g" result="shadowBlur"/>`, e.Shadow.Radius)
+			in = "shadowBlur"
+		}
+		fmt.Fprintf(b, `<feOffset in="%s" dx="%.9g" dy="%.9g" result="shadowOffset"/>`, in, e.Shadow.Offset.X, e.Shadow.Offset.Y)
+		fmt.Fprintf(b, `<feFlood flood-color="%s" flood-opacity="%s" result="shadowColor"/>`, color(e.Shadow.Color), number(e.Shadow.Color.A))
+		b.WriteString(`<feComposite in="shadowColor" in2="shadowOffset" operator="in" result="shadow"/>`)
+		fmt.Fprintf(b, `<feMerge><feMergeNode in="shadow"/><feMergeNode in="%s"/></feMerge>`, body)
+	} else {
+		fmt.Fprintf(b, `<feMerge><feMergeNode in="%s"/></feMerge>`, body)
+	}
+	b.WriteString(`</filter>`)
+}
+
 // SVG uses the same flattened geometry. Browser gradient alpha interpolation and
 // pixel coverage may differ from the canonical PNG renderer; SVG is a vector proof.
 func Export(c scene.Compiled) []byte {
@@ -40,6 +84,9 @@ func Export(c scene.Compiled) []byte {
 		}
 		if len(l.Mask) > 0 {
 			fmt.Fprintf(&b, `<clipPath id="m%d" clipPathUnits="userSpaceOnUse"><path d="%s"/></clipPath>`, i, path(l.Mask))
+		}
+		if l.Layer.Effects != nil {
+			writeFilter(&b, i, l.Layer.Effects, float64(d.Width), float64(d.Height))
 		}
 		for j, s := range l.Shapes {
 			br := s.Shape.Brush
@@ -58,6 +105,9 @@ func Export(c scene.Compiled) []byte {
 		fmt.Fprintf(&b, `<g opacity="%s" style="isolation:isolate;mix-blend-mode:%s"`, number(l.Layer.Opacity), map[string]string{"normal": "normal", "multiply": "multiply", "screen": "screen"}[l.Layer.Blend])
 		if len(l.Clip) > 0 {
 			fmt.Fprintf(&b, ` clip-path="url(#c%d)"`, i)
+		}
+		if l.Layer.Effects != nil {
+			fmt.Fprintf(&b, ` filter="url(#f%d)"`, i)
 		}
 		b.WriteString(`><g`)
 		if len(l.Mask) > 0 {

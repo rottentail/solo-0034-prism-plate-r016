@@ -4,6 +4,7 @@ package validate
 import (
 	"fmt"
 	"math"
+	"prismplate/internal/effect"
 	"prismplate/internal/geom"
 	"prismplate/internal/scene"
 	"regexp"
@@ -89,6 +90,53 @@ func brush(b scene.Brush) error {
 	}
 	return nil
 }
+
+// effectAdmission validates layer effects and returns the deterministic
+// convolution tap count the raster pipeline must perform for this layer.
+func effectAdmission(e *scene.LayerEffects) (taps int64, err error) {
+	if e == nil {
+		return 0, nil
+	}
+	if e.Blur == nil && e.Shadow == nil {
+		return 0, fmt.Errorf("empty effects object")
+	}
+	if e.Blur != nil {
+		r := e.Blur.Radius
+		if !finite(r) || r <= 0 || r > effect.MaxRadius {
+			return 0, fmt.Errorf("blur radius must be within (0,32] canvas pixels")
+		}
+	}
+	if e.Shadow != nil {
+		s := e.Shadow
+		if !Color(s.Color) || s.Color.A <= 0 {
+			return 0, fmt.Errorf("shadow requires a non-transparent color")
+		}
+		if !finite(s.Offset.X) || !finite(s.Offset.Y) || math.Abs(s.Offset.X) > effect.MaxOffset || math.Abs(s.Offset.Y) > effect.MaxOffset {
+			return 0, fmt.Errorf("shadow offset must stay within +-32 canvas pixels")
+		}
+		if !finite(s.Radius) || s.Radius < 0 || s.Radius > effect.MaxRadius {
+			return 0, fmt.Errorf("shadow radius must be within [0,32] canvas pixels")
+		}
+	}
+	// Separable Gaussian: 2 passes * (2*ceil(3*sigma)+1) taps per affected
+	// pixel. The blurred layer RGBA and, when present, the shadow alpha each
+	// pay this cost, so the budget rejects pathological filter work up front.
+	convs := 1
+	if e.Shadow != nil {
+		convs = 2
+	}
+	add := func(sigma float64) {
+		taps += int64(convs) * 2 * int64(2*int(math.Ceil(effect.KernelCut*sigma))+1)
+	}
+	if e.Blur != nil {
+		add(e.Blur.Radius)
+	}
+	if e.Shadow != nil {
+		add(e.Shadow.Radius)
+	}
+	return taps, nil
+}
+
 func Compile(d scene.Document) (scene.Compiled, error) {
 	c := scene.Compiled{Document: d}
 	if d.Width < 1 || d.Height < 1 || d.Width > 512 || d.Height > 512 || !Color(d.Background) {
@@ -120,6 +168,11 @@ func Compile(d scene.Document) (scene.Compiled, error) {
 		if len(l.Shapes) < 1 || len(l.Shapes) > 32 {
 			return c, fmt.Errorf("requires 1..32 shapes per layer")
 		}
+		effectTaps, e := effectAdmission(l.Effects)
+		if e != nil {
+			return c, e
+		}
+		c.EffectTaps += effectTaps
 		cl := scene.CompiledLayer{Layer: l}
 		if len(l.Clip) > 0 {
 			p, e := path(l.Clip)
@@ -173,6 +226,11 @@ func Compile(d scene.Document) (scene.Compiled, error) {
 	// Four samples per pixel; every fill is bounded even under adversarial input.
 	if int64(c.Segments)*int64(d.Width)*int64(d.Height)*4 > 160_000_000 {
 		return c, fmt.Errorf("scene exceeds bounded rendering work")
+	}
+	// Effect taps are per-pixel convolution work; capped independently so a
+	// maximum-radius filter cannot turn a small scene into an unbounded job.
+	if c.EffectTaps*int64(d.Width)*int64(d.Height) > 200_000_000 {
+		return c, fmt.Errorf("layer effects exceed bounded filter work")
 	}
 	return c, nil
 }

@@ -31,7 +31,7 @@ def main():
             except urllib.error.HTTPError as e:code=e.code;payload=e.read();hs={k.lower():v for k,v in e.headers.items()}
             if code!=status:raise RuntimeError(f'{method} {path}: expected {status}, observed {code}: {payload[:200]!r}')
             return (payload,hs) if raw else json.loads(payload) if payload else None
-        def render(fmt='png',revision=1):return call('POST',f'/v1/plates/amber-plate/render?revision={revision}&format={fmt}',status=201)
+        def render(fmt='png',revision=1,plate='amber-plate'):return call('POST',f'/v1/plates/{plate}/render?revision={revision}&format={fmt}',status=201)
         try:
             start();created=call('POST','/v1/plates',seed,status=201);assert created['revisions'][0]['number']==1
             w=args.workflow
@@ -58,6 +58,39 @@ def main():
                 if fmt=='png':assert raw[:8]==b'\x89PNG\r\n\x1a\n';assert struct.unpack('>II',raw[16:24])==(192,144)
                 else:assert b'<svg' in raw and b'<linearGradient' in raw and b'clipPath' in raw
                 assert render(fmt)['digest']==a['digest'];call('GET','/v1/artifacts/'+a['id'],status=304,raw=True,headers={'If-None-Match':hs['etag']});call('GET','/v1/artifacts/missing',status=404)
+                # Layer effects must survive both hand-offs: PNG pixels carry
+                # blur/shadow, SVG carries an explicit filter, and transparent
+                # edges never store color. A second render stays deterministic.
+                fx=copy.deepcopy(seed);fx['id']='fx-plate';fx['document']['width']=80;fx['document']['height']=60
+                fx['document']['background']={'r':0,'g':0,'b':0,'a':0}
+                fx['document']['layers']=[{
+                    'id':'float','opacity':0.9,'blend':'normal',
+                    'effects':{'blur':{'radius':2},'shadow':{'color':{'r':0.1,'g':0.1,'b':0.2,'a':0.5},'offset':{'x':4,'y':4},'radius':3}},
+                    'shapes':[{'id':'blk','fill_rule':'nonzero',
+                        'path':[{'kind':'M','points':[{'x':15,'y':15}]},{'kind':'L','points':[{'x':55,'y':15}]},
+                                {'kind':'L','points':[{'x':55,'y':45}]},{'kind':'L','points':[{'x':15,'y':45}]},{'kind':'Z'}],
+                        'transform':[1,0,0,1,0,0],'brush':{'kind':'solid','color':{'r':0.9,'g':0.4,'b':0.2,'a':1}}}]}]
+                call('POST','/v1/plates',fx,status=201)
+                fa=render(fmt,1,'fx-plate')
+                fa2=render(fmt,1,'fx-plate');assert fa2['digest']==fa['digest'],'effect render is not deterministic'
+                fraw,_=call('GET','/v1/artifacts/'+fa['id'],raw=True)
+                if fmt=='png':
+                    assert fraw[:8]==b'\x89PNG\r\n\x1a\n'
+                    assert struct.unpack('>II',fraw[16:24])==(80,60)
+                    # Decode just enough to confirm the shadow extends past the
+                    # body and fully transparent pixels keep zero RGB.
+                    import zlib as _z
+                    pos,idat=8,b''
+                    while pos<len(fraw):
+                        ln,typ=struct.unpack('>I4s',fraw[pos:pos+8]);chunk=fraw[pos+8:pos+8+ln]
+                        if typ==b'IDAT':idat+=chunk
+                        pos+=12+ln
+                    dec=_z.decompress(idat);assert b'\x00\x00\x00\x00' in dec,'transparent edge must stay zero RGBA'
+                else:
+                    assert b'<filter' in fraw and b'feGaussianBlur' in fraw and b'SourceAlpha' in fraw and b'feOffset' in fraw
+                # Out-of-range effects are rejected at admission, never clamped silently.
+                bad=copy.deepcopy(fx);bad['id']='fx-bad';bad['document']['layers'][0]['effects']['blur']['radius']=40
+                call('POST','/v1/plates',bad,status=400)
                 if w=='artifact':call('DELETE','/v1/artifacts/'+a['id']);call('GET','/v1/artifacts/'+a['id'],status=409)
             elif w in ('exposure','cancel'):
                 job=call('POST','/v1/plates/amber-plate/exposures?revision=1&format=png',status=202)

@@ -1,0 +1,103 @@
+{
+  "id": "floating-proof",
+  "title": "悬浮色块效果校样",
+  "document": {
+    "width": 200,
+    "height": 150,
+    "background": {
+      "r": 0.96,
+      "g": 0.97,
+      "b": 0.99,
+      "a": 1
+    },
+    "layers": [
+      {
+        "id": "floating-card",
+        "opacity": 0.96,
+        "blend": "normal",
+        "effects": {
+          "blur": {
+            "radius": 1.5
+          },
+          "shadow": {
+            "color": {
+              "r": 0.08,
+              "g": 0.1,
+              "b": 0.18,
+              "a": 0.45
+            },
+            "offset": {
+              "x": 5,
+              "y": 7
+            },
+            "radius": 6
+          }
+        },
+        "shapes": [
+          {
+            "id": "card-face",
+            "fill_rule": "nonzero",
+            "path": [
+              {
+                "kind": "M",
+                "points": [
+                  {
+                    "x": 40,
+                    "y": 35
+                  }
+                ]
+              },
+              {
+                "kind": "L",
+                "points": [
+                  {
+                    "x": 160,
+                    "y": 35
+                  }
+                ]
+              },
+              {
+                "kind": "L",
+                "points": [
+                  {
+                    "x": 160,
+                    "y": 115
+                  }
+                ]
+              },
+              {
+                "kind": "L",
+                "points": [
+                  {
+                    "x": 40,
+                    "y": 115
+                  }
+                ]
+              },
+              {
+                "kind": "Z"
+              }
+            ],
+            "transform": [
+              1,
+              0,
+              0,
+              1,
+              0,
+              0
+            ],
+            "brush": {
+              "kind": "solid",
+              "color": {
+                "r": 0.98,
+                "g": 0.5,
+                "b": 0.24,
+                "a": 1
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
